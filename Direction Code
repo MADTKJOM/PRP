@@ -1,0 +1,200 @@
+import android.Manifest;
+import android.app.ProgressDialog;
+import android.content.Context;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.location.Location;
+import android.location.LocationListener;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
+import android.support.design.widget.Snackbar;
+import android.support.v4.app.ActivityCompat;
+import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
+import android.view.View;
+import android.widget.Toast;
+
+import com.akexorcist.googledirection.DirectionCallback;
+import com.akexorcist.googledirection.GoogleDirection;
+import com.akexorcist.googledirection.constant.TransportMode;
+import com.akexorcist.googledirection.model.Direction;
+import com.akexorcist.googledirection.model.Route;
+import com.akexorcist.googledirection.util.DirectionConverter;
+import com.google.android.gms.maps.CameraUpdateFactory;
+import com.google.android.gms.maps.GoogleMap;
+import com.google.android.gms.maps.OnMapReadyCallback;
+import com.google.android.gms.maps.SupportMapFragment;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
+import com.google.android.gms.maps.model.CameraPosition;
+import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.LatLngBounds;
+import com.google.android.gms.maps.model.MarkerOptions;
+import com.google.android.gms.maps.model.Polyline;
+import com.google.android.gms.maps.model.PolylineOptions;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Created by IBLE 1 on 16-Sep-16.
+ */
+public class ActivityMap extends AppCompatActivity implements OnMapReadyCallback, DirectionCallback {
+    private static final int MY_PERMISSIONS_REQUEST_READ_CONTACTS = 1000;
+    private static final String LOG_TAG = "MyActivity";
+    private GoogleMap map;
+    private Context context;
+    private String startLocation;
+    private String endLocation;
+    private LatLng newLocation;
+    private LatLng start;
+    private LatLng end;
+
+
+    @Override
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_map);
+        context = ActivityMap.this;
+        startLocation = getIntent().getExtras().getString("startLocation");
+        endLocation = getIntent().getExtras().getString("endLocation");
+        if (startLocation != null && startLocation.contains(",")) {
+            String[] split = startLocation.split(",");
+            double v1 = Double.parseDouble(split[0]);
+            double v2 = Double.parseDouble(split[1]);
+            start = new LatLng(v1, v2);
+        }
+
+        initViews();
+        new getLatLngFromAPI().execute();
+    }
+
+
+    private void initViews() {
+        SupportMapFragment fragmentById = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map);
+        fragmentById.getMapAsync(this);
+    }
+
+    @Override
+    public void onMapReady(GoogleMap googleMap) {
+        map = googleMap;
+        prepairMap(googleMap);
+
+
+    }
+
+    public class getLatLngFromAPI extends AsyncTask<Void, Void, String> {
+
+        @Override
+        protected String doInBackground(Void... params) {
+            HttpURLConnection urlConnection = null;
+            BufferedReader reader = null;
+
+            String forecastJsonStr = null;
+
+            try {
+                URL url = new URL("https://maps.googleapis.com/maps/api/geocode/json?address=" + endLocation + "&key=AIzaSyD_rBV3vktFJqIWqp8nkH1K-8pc-2GEslo");
+
+                urlConnection = (HttpURLConnection) url.openConnection();
+                urlConnection.setRequestMethod("GET");
+                urlConnection.connect();
+
+                InputStream inputStream = urlConnection.getInputStream();
+                StringBuffer buffer = new StringBuffer();
+                if (inputStream == null) {
+                    return null;
+                }
+                reader = new BufferedReader(new InputStreamReader(inputStream));
+
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    buffer.append(line + "\n");
+                }
+
+                if (buffer.length() == 0) {
+                    return null;
+                }
+                forecastJsonStr = buffer.toString();
+                return forecastJsonStr;
+            } catch (IOException e) {
+                Log.e("Fragment", "Error ", e);
+                return null;
+            } finally {
+                if (urlConnection != null) {
+                    urlConnection.disconnect();
+                }
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (final IOException e) {
+                        Log.e("Fragment", "Error closing stream", e);
+                    }
+                }
+            }
+        }
+
+        @Override
+        protected void onPostExecute(String s) {
+            super.onPostExecute(s);
+            try {
+                JSONObject object = new JSONObject(s);
+                if (object.optString("status").equalsIgnoreCase("OK")) {
+                    JSONArray results = object.getJSONArray("results");
+                    JSONObject geometry = results.getJSONObject(0);
+                    JSONObject geometry1 = geometry.getJSONObject("geometry");
+                    JSONObject location = geometry1.getJSONObject("location");
+                    double lat = location.getDouble("lat");
+                    double lng = location.getDouble("lng");
+                    end = new LatLng(lat, lng);
+                    if (start != null && end != null) {
+                        requestDirection();
+                    }
+                } else {
+
+                }
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+
+        }
+    }
+    
+     public void onDirectionSuccess(Direction direction, String rawBody) {
+        if (direction.isOK()) {
+            Route route = direction.getRouteList().get(0);
+            map.addMarker(new MarkerOptions().position(start));
+            map.addMarker(new MarkerOptions().position(end));
+
+            ArrayList<LatLng> directionPositionList = route.getLegList().get(0).getDirectionPoint();
+            map.addPolyline(DirectionConverter.createPolyline(this, directionPositionList, 5, Color.RED));
+            setCameraWithCoordinationBounds(route);
+        } else {
+            Toast.makeText(this, direction.getStatus(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    public void onDirectionFailure(Throwable t) {
+        Toast.makeText(this, t.getMessage(), Toast.LENGTH_SHORT).show();
+    }
+
+    private void setCameraWithCoordinationBounds(Route route) {
+        LatLng southwest = route.getBound().getSouthwestCoordination().getCoordination();
+        LatLng northeast = route.getBound().getNortheastCoordination().getCoordination();
+        LatLngBounds bounds = new LatLngBounds(southwest, northeast);
+        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 100));
+    }
+}
+    
+    
